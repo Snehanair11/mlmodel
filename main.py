@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware   # ✅ ADD
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -16,6 +17,19 @@ from search_client import web_search
 
 
 app = FastAPI()
+
+# ✅ CORS FIX — ADD THIS BLOCK
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4000",
+        "http://127.0.0.1:4000",
+        "https://your-frontend-domain.com",  # optional — replace later
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------- request schema ----------------
