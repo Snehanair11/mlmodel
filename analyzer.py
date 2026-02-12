@@ -5,23 +5,32 @@ import re
 # ---------------- MODEL LAZY LOAD ----------------
 
 emotion_pipe = None
+emotion_available = True   # global flag
+
 
 def get_emotion_pipe():
-    global emotion_pipe
-    if emotion_pipe is None:
-        print("Loading emotion model (lazy)...")
-        emotion_pipe = pipeline(
-            "text-classification",
-            model="j-hartmann/emotion-english-distilroberta-base",
-            top_k=3
-        )
+    global emotion_pipe, emotion_available
+
+    if emotion_pipe is None and emotion_available:
+        try:
+            print("Loading emotion model (lazy)...")
+            emotion_pipe = pipeline(
+                "text-classification",
+                model="j-hartmann/emotion-english-distilroberta-base",
+                top_k=3
+            )
+        except Exception as e:
+            print("Emotion model load failed — fallback mode:", e)
+            emotion_available = False
+            emotion_pipe = None
+
     return emotion_pipe
 
 
 # ---------------- LABEL GROUPS ----------------
 
-NEG = {"sadness", "anger", "frustration", "fear"}
-POS = {"happiness", "joy", "surprise"}
+NEG = {"sadness", "anger", "fear", "disgust"}
+POS = {"joy", "happiness", "surprise", "love"}
 
 
 # ---------------- SLANG PATTERNS ----------------
@@ -80,7 +89,6 @@ def grief_override(text: str) -> bool:
 def distress_slang_override(text: str) -> bool:
     t = text.lower()
 
-    # positive slang context wins first
     if any(p in t for p in WIN_PATTERNS):
         return False
 
@@ -93,6 +101,20 @@ def distress_slang_override(text: str) -> bool:
     return False
 
 
+# ---------------- FALLBACK HEURISTIC ----------------
+
+def heuristic_emotion(text: str):
+    t = text.lower()
+
+    if any(w in t for w in ["yay", "finally", "won", "got it", "success"]):
+        return "super_happy"
+
+    if any(w in t for w in ["sad", "tired", "overwhelmed", "cry", "done"]):
+        return "distress"
+
+    return "neutral"
+
+
 # ---------------- SCORING ----------------
 
 def overall_emotion(emotions):
@@ -100,7 +122,7 @@ def overall_emotion(emotions):
     if not emotions:
         return "neutral"
 
-    label = emotions[0]["label"]
+    label = emotions[0]["label"].lower()
     score = emotions[0]["score"]
 
     if label in NEG:
@@ -134,20 +156,25 @@ def analyze_text(text: str):
     except:
         lang = "unknown"
 
-    # ---- emotion inference (lazy load) ----
-    try:
-        pipe = get_emotion_pipe()
-        emo = pipe(clean)[0]
-    except Exception as e:
-        print("Emotion model error:", e)
-        emo = []
+    emotions = []
+    overall = "neutral"
 
-    emotions = [
-        {"label": e["label"], "score": float(e["score"])}
-        for e in emo
-    ]
+    # ---- model inference (safe lazy) ----
+    pipe = get_emotion_pipe()
 
-    overall = overall_emotion(emotions)
+    if pipe:
+        try:
+            emo = pipe(clean)[0]
+            emotions = [
+                {"label": e["label"], "score": float(e["score"])}
+                for e in emo
+            ]
+            overall = overall_emotion(emotions)
+        except Exception as e:
+            print("Emotion inference failed:", e)
+            overall = heuristic_emotion(clean)
+    else:
+        overall = heuristic_emotion(clean)
 
     # ---- overrides ----
     if grief_override(clean):
@@ -155,7 +182,6 @@ def analyze_text(text: str):
     elif distress_slang_override(clean):
         overall = "strong_distress"
 
-    # ---- output ----
     return {
         "language": lang,
         "emotions": emotions,
