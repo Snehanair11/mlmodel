@@ -2,19 +2,29 @@ from transformers import pipeline
 from langdetect import detect
 import re
 
-print("Loading emotion model...")
+# ---------------- MODEL LAZY LOAD ----------------
 
-emotion_pipe = pipeline(
-    "text-classification",
-    model="j-hartmann/emotion-english-distilroberta-base",
-    top_k=3
-)
+emotion_pipe = None
+
+def get_emotion_pipe():
+    global emotion_pipe
+    if emotion_pipe is None:
+        print("Loading emotion model (lazy)...")
+        emotion_pipe = pipeline(
+            "text-classification",
+            model="j-hartmann/emotion-english-distilroberta-base",
+            top_k=3
+        )
+    return emotion_pipe
+
+
+# ---------------- LABEL GROUPS ----------------
 
 NEG = {"sadness", "anger", "frustration", "fear"}
 POS = {"happiness", "joy", "surprise"}
 
 
-# ---------- slang patterns ----------
+# ---------------- SLANG PATTERNS ----------------
 
 DISTRESS_PATTERNS = [
     "i'm cooked", "im cooked", "i am cooked",
@@ -42,7 +52,7 @@ GRIEF_PHRASES = [
 ]
 
 
-# ---------- style signal detectors ----------
+# ---------------- STYLE SIGNALS ----------------
 
 def detect_caps_intensity(text: str) -> bool:
     letters = [c for c in text if c.isalpha()]
@@ -60,7 +70,7 @@ def detect_bro_style(text: str) -> bool:
     return any(w in t for w in ["bro", "dude", "man", "bruh"])
 
 
-# ---------- override logic ----------
+# ---------------- OVERRIDES ----------------
 
 def grief_override(text: str) -> bool:
     t = text.lower()
@@ -70,6 +80,7 @@ def grief_override(text: str) -> bool:
 def distress_slang_override(text: str) -> bool:
     t = text.lower()
 
+    # positive slang context wins first
     if any(p in t for p in WIN_PATTERNS):
         return False
 
@@ -82,7 +93,7 @@ def distress_slang_override(text: str) -> bool:
     return False
 
 
-# ---------- scoring ----------
+# ---------------- SCORING ----------------
 
 def overall_emotion(emotions):
 
@@ -101,25 +112,35 @@ def overall_emotion(emotions):
     return "neutral"
 
 
-# ---------- main ----------
+# ---------------- MAIN ANALYZER ----------------
 
 def analyze_text(text: str):
 
-    if not text.strip():
+    if not text or not text.strip():
         return {
             "language": "unknown",
             "emotions": [],
-            "overall": "neutral"
+            "overall": "neutral",
+            "caps_intense": False,
+            "stretch_intense": False,
+            "bro_style": False
         }
 
     clean = text.strip()
 
+    # ---- language detect ----
     try:
         lang = "en" if len(clean) < 20 else detect(clean)
     except:
         lang = "unknown"
 
-    emo = emotion_pipe(clean)[0]
+    # ---- emotion inference (lazy load) ----
+    try:
+        pipe = get_emotion_pipe()
+        emo = pipe(clean)[0]
+    except Exception as e:
+        print("Emotion model error:", e)
+        emo = []
 
     emotions = [
         {"label": e["label"], "score": float(e["score"])}
@@ -128,11 +149,13 @@ def analyze_text(text: str):
 
     overall = overall_emotion(emotions)
 
+    # ---- overrides ----
     if grief_override(clean):
         overall = "strong_distress"
     elif distress_slang_override(clean):
         overall = "strong_distress"
 
+    # ---- output ----
     return {
         "language": lang,
         "emotions": emotions,
